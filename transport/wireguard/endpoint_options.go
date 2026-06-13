@@ -9,6 +9,7 @@ import (
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/wireguard-go/conn"
 )
 
 type EndpointOptions struct {
@@ -25,6 +26,7 @@ type EndpointOptions struct {
 	Address      []netip.Prefix
 	PrivateKey   string
 	ListenPort   uint16
+	Bind         conn.Bind
 	ResolvePeer  func(domain string) (netip.Addr, error)
 	Peers        []PeerOptions
 	Workers      int

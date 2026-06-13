@@ -155,9 +155,12 @@ func (e *Endpoint) Start(resolve bool) error {
 		return nil
 	}
 	var bind conn.Bind
-	wgListener, isWgListener := common.Cast[dialer.WireGuardListener](e.options.Dialer)
-	if isWgListener {
+	var isStdBind bool
+	if e.options.Bind != nil {
+		bind = e.options.Bind
+	} else if wgListener, isWgListener := common.Cast[dialer.WireGuardListener](e.options.Dialer); isWgListener {
 		bind = conn.NewStdNetBind(wgListener.WireGuardControl())
+		isStdBind = true
 	} else {
 		var (
 			isConnect   bool
@@ -171,7 +174,7 @@ func (e *Endpoint) Start(resolve bool) error {
 		}
 		bind = NewClientBind(e.options.Context, e.options.Logger, e.options.Dialer, isConnect, connectAddr, reserved)
 	}
-	if isWgListener || len(e.peers) > 1 {
+	if e.options.Bind != nil || isStdBind || len(e.peers) > 1 {
 		for _, peer := range e.peers {
 			if peer.reserved != [3]uint8{} {
 				bind.SetReservedForEndpoint(peer.endpoint, peer.reserved)

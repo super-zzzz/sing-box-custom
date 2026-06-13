@@ -10,6 +10,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/common/dialer"
+	boxXOR "github.com/sagernet/sing-box/common/xor"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -23,6 +24,7 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
+	"github.com/sagernet/wireguard-go/conn"
 )
 
 var (
@@ -54,8 +56,8 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		logger:         logger,
 		localAddresses: options.Address,
 	}
-	if options.Detour != "" && options.ListenPort != 0 {
-		return nil, E.New("`listen_port` is conflict with `detour`")
+	if options.Detour != "" && (options.ListenPort != 0 || options.Bind != nil) {
+		return nil, E.New("`listen_port`/`bind` is conflict with `detour`")
 	}
 	outboundDialer, err := dialer.NewWithOptions(dialer.Options{
 		Context: ctx,
@@ -74,6 +76,27 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	} else {
 		udpTimeout = C.UDPTimeout
 	}
+	listenPort := options.ListenPort
+	var bind conn.Bind
+	if options.Bind != nil {
+		if options.Bind.Type != C.TypeXOR {
+			return nil, E.New("unknown wireguard bind type: ", options.Bind.Type)
+		}
+		if options.Bind.XORTo == nil {
+			return nil, E.New("missing bind.xor-to")
+		}
+		if options.Bind.ListenPort != 0 {
+			if listenPort != 0 && listenPort != options.Bind.ListenPort {
+				return nil, E.New("`listen_port` is conflict with `bind.listen_port`")
+			}
+			listenPort = options.Bind.ListenPort
+		}
+		listenAddress := netip.IPv4Unspecified()
+		if options.Bind.Listen != nil {
+			listenAddress = options.Bind.Listen.Build(listenAddress)
+		}
+		bind = wireguard.NewXORBind(ctx, listenAddress, listenPort, *options.Bind.XORTo, boxXOR.Length(options.Bind.XORLength))
+	}
 	wgEndpoint, err := wireguard.NewEndpoint(wireguard.EndpointOptions{
 		Context:     ctx,
 		Logger:      logger,
@@ -91,7 +114,8 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		MTU:        options.MTU,
 		Address:    options.Address,
 		PrivateKey: options.PrivateKey,
-		ListenPort: options.ListenPort,
+		ListenPort: listenPort,
+		Bind:       bind,
 		ResolvePeer: func(domain string) (netip.Addr, error) {
 			endpointAddresses, lookupErr := ep.dnsRouter.Lookup(ctx, domain, outboundDialer.(dialer.ResolveDialer).QueryOptions())
 			if lookupErr != nil {

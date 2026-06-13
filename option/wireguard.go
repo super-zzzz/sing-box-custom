@@ -13,6 +13,7 @@ type WireGuardEndpointOptions struct {
 	Address    badoption.Listable[netip.Prefix] `json:"address"`
 	PrivateKey string                           `json:"private_key"`
 	ListenPort uint16                           `json:"listen_port,omitempty"`
+	Bind       *WireGuardBindOptions            `json:"bind,omitempty"`
 	Peers      []WireGuardPeer                  `json:"peers,omitempty"`
 	UDPTimeout badoption.Duration               `json:"udp_timeout,omitempty"`
 	Workers    int                              `json:"workers,omitempty"`
