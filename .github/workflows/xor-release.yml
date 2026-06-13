@@ -138,10 +138,10 @@ jobs:
           git remote add upstream https://github.com/SagerNet/sing-box.git
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           git fetch --depth=1 upstream "refs/tags/${UPSTREAM_TAG}:refs/tags/${UPSTREAM_TAG}"
-          git fetch origin "${XOR_BRANCH}"
           git fetch upstream "refs/tags/${BASE_TAG}:refs/tags/${BASE_TAG}"
+          git fetch origin "refs/heads/${XOR_BRANCH}:refs/remotes/origin/${XOR_BRANCH}"
           git checkout -B build-xor "${UPSTREAM_TAG}"
-          git cherry-pick --empty=drop "${BASE_TAG}..FETCH_HEAD"
+          git cherry-pick --empty=drop "${BASE_TAG}..refs/remotes/origin/${XOR_BRANCH}"
 
       - name: Test XOR packages
         shell: bash
