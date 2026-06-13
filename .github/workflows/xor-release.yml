@@ -1,0 +1,220 @@
+name: Build XOR Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream sing-box tag to build, for example v1.14.0"
+        required: false
+        type: string
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: xor-release-${{ github.event_name }}-${{ inputs.tag || 'latest' }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_tag: ${{ steps.prepare.outputs.upstream_tag }}
+      release_tag: ${{ steps.prepare.outputs.release_tag }}
+      base: ${{ steps.series.outputs.base }}
+      branch: ${{ steps.series.outputs.branch }}
+      version: ${{ steps.prepare.outputs.version }}
+      skip: ${{ steps.prepare.outputs.skip }}
+    steps:
+      - name: Checkout controller
+        uses: actions/checkout@v5
+        with:
+          path: controller
+
+      - name: Resolve upstream tag
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          cd controller
+          upstream=$(jq -r '.upstream' .github/xor-release.json)
+          prefix=$(jq -r '.release_prefix' .github/xor-release.json)
+          if [[ -n "${INPUT_TAG}" ]]; then
+            upstream_tag="${INPUT_TAG}"
+          else
+            upstream_tag=$(gh release list -R "${upstream}" --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          release_tag="${prefix}${upstream_tag}"
+          if gh release view "${release_tag}" -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "skip=false" >> "${GITHUB_OUTPUT}"
+          fi
+          echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${upstream_tag#v}-xor" >> "${GITHUB_OUTPUT}"
+
+      - name: Select XOR series
+        id: series
+        if: steps.prepare.outputs.skip != 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.prepare.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          def parse_version(tag):
+              match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", tag)
+              if not match:
+                  raise SystemExit(f"unsupported version tag: {tag}")
+              return tuple(int(part) for part in match.groups())
+
+          upstream = parse_version(os.environ["UPSTREAM_TAG"])
+          with open("controller/.github/xor-release.json", "r", encoding="utf-8") as handle:
+              manifest = json.load(handle)
+          selected = None
+          for item in manifest["series"]:
+              if parse_version(item["from"]) <= upstream:
+                  if selected is None or parse_version(item["from"]) > parse_version(selected["from"]):
+                      selected = item
+          if selected is None:
+              raise SystemExit(f"no XOR series configured for {os.environ['UPSTREAM_TAG']}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"base={selected['base']}\n")
+              output.write(f"branch={selected['branch']}\n")
+          PY
+
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ${{ matrix.os == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            arch: amd64
+            extension: .exe
+            archive: zip
+          - os: linux
+            arch: amd64
+            extension: ""
+            archive: tar.gz
+          - os: linux
+            arch: arm64
+            extension: ""
+            archive: tar.gz
+    steps:
+      - name: Checkout controller
+        uses: actions/checkout@v5
+        with:
+          path: controller
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ~1.25.11
+
+      - name: Prepare XOR source
+        shell: bash
+        env:
+          UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+          BASE_TAG: ${{ needs.prepare.outputs.base }}
+          XOR_BRANCH: ${{ needs.prepare.outputs.branch }}
+        run: |
+          set -euo pipefail
+          mkdir source
+          cd source
+          git init
+          git remote add upstream https://github.com/SagerNet/sing-box.git
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 upstream "refs/tags/${UPSTREAM_TAG}:refs/tags/${UPSTREAM_TAG}"
+          git fetch origin "${XOR_BRANCH}"
+          git fetch upstream "refs/tags/${BASE_TAG}:refs/tags/${BASE_TAG}"
+          git checkout -B build-xor "${UPSTREAM_TAG}"
+          git cherry-pick --empty=drop "${BASE_TAG}..FETCH_HEAD"
+
+      - name: Test XOR packages
+        shell: bash
+        working-directory: source
+        run: |
+          set -euo pipefail
+          go test ./common/xor ./protocol/xor ./transport/wireguard ./protocol/wireguard
+
+      - name: Build
+        shell: bash
+        working-directory: source
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          tags=$(cat release/DEFAULT_BUILD_TAGS_OTHERS)
+          ldflags=$(cat release/LDFLAGS)
+          mkdir -p dist
+          go build -v -trimpath -o "dist/sing-box${{ matrix.extension }}" -tags "${tags}" \
+            -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' ${ldflags} -s -w -buildid=" \
+            ./cmd/sing-box
+
+      - name: Check example config
+        if: matrix.os == 'windows' && matrix.arch == 'amd64'
+        shell: bash
+        working-directory: source
+        run: ./dist/sing-box.exe check -c .test/xor-client-example.json
+
+      - name: Archive
+        shell: bash
+        working-directory: source
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          name="sing-box-${RELEASE_TAG}-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p upload
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            7z a "upload/${name}.zip" "./dist/sing-box${{ matrix.extension }}"
+          else
+            tar -czf "upload/${name}.tar.gz" -C dist "sing-box${{ matrix.extension }}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.os }}-${{ matrix.arch }}
+          path: source/upload/*
+
+  release:
+    name: Publish release
+    needs:
+      - prepare
+      - build
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          gh release create "${RELEASE_TAG}" dist/* \
+            --title "sing-box XOR ${UPSTREAM_TAG}" \
+            --notes "XOR-enabled sing-box build based on upstream ${UPSTREAM_TAG}."
