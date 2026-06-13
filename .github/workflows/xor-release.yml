@@ -212,5 +212,6 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "${RELEASE_TAG}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "sing-box XOR ${UPSTREAM_TAG}" \
             --notes "XOR-enabled sing-box build based on upstream ${UPSTREAM_TAG}."
