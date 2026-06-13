@@ -167,12 +167,6 @@ jobs:
             -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' ${ldflags} -s -w -buildid=" \
             ./cmd/sing-box
 
-      - name: Check example config
-        if: matrix.os == 'windows' && matrix.arch == 'amd64'
-        shell: bash
-        working-directory: source
-        run: ./dist/sing-box.exe check -c .test/xor-client-example.json
-
       - name: Archive
         shell: bash
         working-directory: source

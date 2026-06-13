@@ -3,9 +3,9 @@
   "release_prefix": "xor-",
   "series": [
     {
-      "from": "v1.14.0",
-      "base": "v1.14.0",
-      "branch": "xor/v1.14"
+      "from": "v1.13.13",
+      "base": "v1.13.13",
+      "branch": "xor/v1.13"
     }
   ],
   "targets": [
