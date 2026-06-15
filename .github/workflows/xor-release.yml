@@ -27,6 +27,7 @@ jobs:
       base: ${{ steps.series.outputs.base }}
       branch: ${{ steps.series.outputs.branch }}
       version: ${{ steps.prepare.outputs.version }}
+      prerelease: ${{ steps.prepare.outputs.prerelease }}
       skip: ${{ steps.prepare.outputs.skip }}
     steps:
       - name: Checkout controller
@@ -42,22 +43,46 @@ jobs:
         run: |
           set -euo pipefail
           cd controller
-          upstream=$(jq -r '.upstream' .github/xor-release.json)
-          prefix=$(jq -r '.release_prefix' .github/xor-release.json)
+          upstream=$(jq -r '.upstream' xor-release.json)
+          prefix=$(jq -r '.release_prefix' xor-release.json)
           if [[ -n "${INPUT_TAG}" ]]; then
             upstream_tag="${INPUT_TAG}"
           else
             upstream_tag=$(gh release list -R "${upstream}" --limit 1 --json tagName -q '.[0].tagName')
           fi
           release_tag="${prefix}${upstream_tag}"
+          if [[ "${upstream_tag}" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
           if gh release view "${release_tag}" -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "skip=true" >> "${GITHUB_OUTPUT}"
+            skip=true
           else
             echo "skip=false" >> "${GITHUB_OUTPUT}"
+            skip=false
           fi
+          echo "Upstream repository: ${upstream}"
+          echo "Selected upstream tag: ${upstream_tag}"
+          echo "Output release tag: ${release_tag}"
+          echo "Pre-release build: ${prerelease}"
+          echo "Already published: ${skip}"
           echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${upstream_tag#v}-xor" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### XOR Release"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Upstream repository | \`${upstream}\` |"
+            echo "| Upstream tag | \`${upstream_tag}\` |"
+            echo "| Release tag | \`${release_tag}\` |"
+            echo "| Pre-release | \`${prerelease}\` |"
+            echo "| Already published | \`${skip}\` |"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Select XOR series
         id: series
@@ -97,7 +122,7 @@ jobs:
               return core + (tuple(parts),)
 
           upstream = parse_version(os.environ["UPSTREAM_TAG"])
-          with open("controller/.github/xor-release.json", "r", encoding="utf-8") as handle:
+          with open("controller/xor-release.json", "r", encoding="utf-8") as handle:
               manifest = json.load(handle)
           selected = None
           for item in manifest["series"]:
@@ -108,9 +133,15 @@ jobs:
                       selected = item
           if selected is None:
               raise SystemExit(f"no XOR series configured for {os.environ['UPSTREAM_TAG']}")
+          print(f"Selected upstream tag: {os.environ['UPSTREAM_TAG']}")
+          print(f"Selected XOR base tag: {selected['base']}")
+          print(f"Selected XOR branch: {selected['branch']}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"base={selected['base']}\n")
               output.write(f"branch={selected['branch']}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"| XOR base tag | `{selected['base']}` |\n")
+              summary.write(f"| XOR branch | `{selected['branch']}` |\n")
           PY
 
   build:
@@ -230,9 +261,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
           UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
           set -euo pipefail
-          gh release create "${RELEASE_TAG}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "sing-box XOR ${UPSTREAM_TAG}" \
+          release_args=(
+            "${RELEASE_TAG}"
+            dist/*
+            --repo "${GITHUB_REPOSITORY}"
+            --title "sing-box XOR ${UPSTREAM_TAG}"
             --notes "XOR-enabled sing-box build based on upstream ${UPSTREAM_TAG}."
+          )
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            release_args+=(--prerelease --latest=false)
+          fi
+          gh release create "${release_args[@]}"
