@@ -71,18 +71,39 @@ jobs:
           import os
           import re
 
+          prerelease_order = {
+              "dev": 0,
+              "alpha": 1,
+              "a": 1,
+              "beta": 2,
+              "b": 2,
+              "rc": 3,
+          }
+
           def parse_version(tag):
-              match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", tag)
+              match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+.*)?", tag)
               if not match:
                   raise SystemExit(f"unsupported version tag: {tag}")
-              return tuple(int(part) for part in match.groups())
+              major, minor, patch, prerelease = match.groups()
+              core = (int(major), int(minor), int(patch))
+              if prerelease is None:
+                  return core + ((99,),)
+              parts = []
+              for part in re.split(r"[.-]", prerelease):
+                  if part.isdigit():
+                      parts.append(int(part))
+                  else:
+                      parts.append(prerelease_order.get(part.lower(), -1))
+              return core + (tuple(parts),)
 
           upstream = parse_version(os.environ["UPSTREAM_TAG"])
           with open("controller/.github/xor-release.json", "r", encoding="utf-8") as handle:
               manifest = json.load(handle)
           selected = None
           for item in manifest["series"]:
-              if parse_version(item["from"]) <= upstream:
+              if parse_version(item["from"]) <= upstream and (
+                  "before" not in item or upstream < parse_version(item["before"])
+              ):
                   if selected is None or parse_version(item["from"]) > parse_version(selected["from"]):
                       selected = item
           if selected is None:

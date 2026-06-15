@@ -4,8 +4,14 @@
   "series": [
     {
       "from": "v1.13.13",
+      "before": "v1.14.0-alpha.0",
       "base": "v1.13.13",
       "branch": "xor/v1.13"
+    },
+    {
+      "from": "v1.14.0-alpha.30",
+      "base": "v1.14.0-alpha.30",
+      "branch": "xor/v1.14"
     }
   ],
   "targets": [
